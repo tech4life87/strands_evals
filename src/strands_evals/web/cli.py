@@ -43,16 +43,16 @@ def start_backend(host: str = "127.0.0.1", port: int = 8000) -> subprocess.Popen
 def start_frontend(
     host: str = "127.0.0.1", port: int = 3000, api_url: str = "http://127.0.0.1:8000"
 ) -> subprocess.Popen:
-    """Start the frontend development server."""
+    """Start the frontend development server (Next.js)."""
     frontend_path = get_frontend_path()
 
     if not frontend_path.exists():
         raise FileNotFoundError(f"Frontend directory not found: {frontend_path}")
 
     env = os.environ.copy()
-    env["VITE_API_URL"] = api_url
+    env["NEXT_PUBLIC_API_URL"] = api_url
 
-    cmd = ["npm", "run", "dev", "--", "--host", host, "--port", str(port)]
+    cmd = ["npm", "run", "dev", "--", "-H", host, "-p", str(port)]
 
     return subprocess.Popen(
         cmd,
