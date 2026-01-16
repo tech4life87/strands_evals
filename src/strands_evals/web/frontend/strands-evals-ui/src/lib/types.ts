@@ -28,12 +28,18 @@ export interface EvaluatorConfig {
   trajectory_description?: Record<string, unknown> | null;
 }
 
+export interface AgentConfig {
+  model_id?: string | null;
+  system_prompt?: string | null;
+}
+
 export interface Experiment {
   id: string;
   name: string;
   description: string | null;
   cases: Case[];
   evaluators: EvaluatorConfig[];
+  agent_config?: AgentConfig | null;
   created_at: string;
   updated_at: string;
 }

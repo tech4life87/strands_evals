@@ -7,6 +7,7 @@ import type {
   EvaluatorTypeInfo,
   EvaluationStatus,
   EvaluationReport,
+  AgentConfig,
 } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -43,7 +44,7 @@ export const api = {
         body: JSON.stringify(data),
       }),
     
-    update: (id: string, data: { name?: string; description?: string }) =>
+    update: (id: string, data: { name?: string; description?: string; agent_config?: AgentConfig }) =>
       fetchApi<Experiment>(`/api/experiments/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),

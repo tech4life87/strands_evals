@@ -37,6 +37,7 @@ class ExperimentStorage:
         description: str | None = None,
         cases: list[dict[str, Any]] | None = None,
         evaluators: list[dict[str, Any]] | None = None,
+        agent_config: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a new experiment."""
         experiment_id = str(uuid.uuid4())
@@ -66,6 +67,7 @@ class ExperimentStorage:
             "description": description,
             "cases": processed_cases,
             "evaluators": evaluators or [],
+            "agent_config": agent_config,
             "created_at": now,
             "updated_at": now,
         }
@@ -92,7 +94,11 @@ class ExperimentStorage:
         ]
 
     def update_experiment(
-        self, experiment_id: str, name: str | None = None, description: str | None = None
+        self,
+        experiment_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        agent_config: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Update an experiment."""
         experiment = self._experiments.get(experiment_id)
@@ -103,6 +109,8 @@ class ExperimentStorage:
             experiment["name"] = name
         if description is not None:
             experiment["description"] = description
+        if agent_config is not None:
+            experiment["agent_config"] = agent_config
         experiment["updated_at"] = self._now_iso()
         return experiment
 

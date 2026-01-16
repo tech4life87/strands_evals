@@ -40,6 +40,7 @@ import type { Experiment, EvaluationStatus, EvaluationReport } from '@/lib/types
 import { formatScore, downloadJson } from '@/lib/utils';
 import { CaseEditor } from '@/components/editors/CaseEditor';
 import { EvaluatorEditor } from '@/components/editors/EvaluatorEditor';
+import { AgentConfigEditor } from '@/components/editors/AgentConfigEditor';
 
 export default function ExperimentDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -51,6 +52,7 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
   const [showCaseEditor, setShowCaseEditor] = useState(false);
   const [editingCase, setEditingCase] = useState<string | null>(null);
   const [showEvaluatorEditor, setShowEvaluatorEditor] = useState(false);
+  const [showAgentConfigEditor, setShowAgentConfigEditor] = useState(false);
   const [deleteCase, setDeleteCase] = useState<string | null>(null);
   const [deleteEvaluator, setDeleteEvaluator] = useState<string | null>(null);
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
@@ -72,22 +74,67 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
 
   async function runEvaluation() {
     if (!experiment) return;
+    setError(null);
     try {
       const status = await api.evaluations.runAsync(id);
       setEvaluation(status);
 
       const ws = createWebSocket(status.id);
+      
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'progress') {
-          setEvaluation(prev => prev ? { ...prev, ...data.status } : null);
-        } else if (data.type === 'complete') {
-          setEvaluation(prev => prev ? { ...prev, status: 'completed', progress: 100 } : null);
-          setReports(data.reports || []);
-          ws.close();
-        } else if (data.type === 'error') {
-          setEvaluation(prev => prev ? { ...prev, status: 'failed', error: data.error } : null);
-          ws.close();
+        if (event.data === 'ping') {
+          ws.send('pong');
+          return;
+        }
+        if (event.data === 'pong') {
+          return;
+        }
+        
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'progress') {
+            setEvaluation(prev => prev ? {
+              ...prev,
+              progress: data.progress,
+              current_case: data.current_case,
+              total_cases: data.total_cases,
+              status: 'running',
+            } : null);
+          } else if (data.type === 'status') {
+            setEvaluation(prev => prev ? {
+              ...prev,
+              progress: data.progress,
+              current_case: data.current_case,
+              total_cases: data.total_cases,
+              status: data.status,
+            } : null);
+          } else if (data.type === 'completed') {
+            setEvaluation(prev => prev ? { ...prev, status: 'completed', progress: 100 } : null);
+            api.evaluations.getReport(status.id).then(setReports).catch(console.error);
+            ws.close();
+          } else if (data.type === 'error') {
+            setEvaluation(prev => prev ? { ...prev, status: 'failed', error: data.error } : null);
+            setError(data.error || 'Evaluation failed');
+            ws.close();
+          }
+        } catch (parseError) {
+          console.error('Failed to parse WebSocket message:', event.data, parseError);
+        }
+      };
+
+      ws.onerror = (event) => {
+        console.error('WebSocket error:', event);
+        setError('WebSocket connection error');
+      };
+
+      ws.onclose = () => {
+        if (evaluation?.status === 'running') {
+          api.evaluations.getStatus(status.id).then(finalStatus => {
+            setEvaluation(finalStatus);
+            if (finalStatus.status === 'completed') {
+              api.evaluations.getReport(status.id).then(setReports).catch(console.error);
+            }
+          }).catch(console.error);
         }
       };
     } catch (err) {
@@ -163,7 +210,8 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
     );
   }
 
-  const canRunEvaluation = experiment.cases.length > 0 && experiment.evaluators.length > 0;
+  const hasAgentConfig = experiment.agent_config && (experiment.agent_config.model_id || experiment.agent_config.system_prompt);
+  const canRunEvaluation = experiment.cases.length > 0 && experiment.evaluators.length > 0 && hasAgentConfig;
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -223,6 +271,7 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
         <TabsList>
           <TabsTrigger value="cases">Cases ({experiment.cases.length})</TabsTrigger>
           <TabsTrigger value="evaluators">Evaluators ({experiment.evaluators.length})</TabsTrigger>
+          <TabsTrigger value="agent">Agent {hasAgentConfig ? '' : '(Not configured)'}</TabsTrigger>
           <TabsTrigger value="results" disabled={reports.length === 0}>Results</TabsTrigger>
         </TabsList>
 
@@ -397,6 +446,55 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
           )}
         </TabsContent>
 
+        <TabsContent value="agent" className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-lg font-semibold">Agent Configuration</h2>
+            <Button onClick={() => setShowAgentConfigEditor(true)}>
+              <Edit className="mr-2 h-4 w-4" />
+              {hasAgentConfig ? 'Edit Configuration' : 'Configure Agent'}
+            </Button>
+          </div>
+
+          {!hasAgentConfig ? (
+            <Card className="text-center py-8">
+              <CardContent>
+                <p className="text-muted-foreground mb-4">
+                  No agent configured. You need to configure an agent before running evaluations.
+                </p>
+                <Button onClick={() => setShowAgentConfigEditor(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Configure Agent
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Current Configuration</CardTitle>
+                <CardDescription>
+                  This agent will be used to process each test case during evaluation.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {experiment.agent_config?.model_id && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">Model ID</h4>
+                    <Badge variant="secondary">{experiment.agent_config.model_id}</Badge>
+                  </div>
+                )}
+                {experiment.agent_config?.system_prompt && (
+                  <div>
+                    <h4 className="text-sm font-medium mb-1">System Prompt</h4>
+                    <pre className="bg-muted p-3 rounded-md text-sm overflow-auto max-h-40 whitespace-pre-wrap">
+                      {experiment.agent_config.system_prompt}
+                    </pre>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
         <TabsContent value="results" className="space-y-4">
           {reports.map((report, reportIndex) => (
             <Card key={reportIndex}>
@@ -504,6 +602,18 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
           onClose={() => setShowEvaluatorEditor(false)}
           onSave={() => {
             setShowEvaluatorEditor(false);
+            loadExperiment();
+          }}
+        />
+      )}
+
+      {showAgentConfigEditor && (
+        <AgentConfigEditor
+          experimentId={id}
+          currentConfig={experiment.agent_config}
+          onClose={() => setShowAgentConfigEditor(false)}
+          onSave={() => {
+            setShowAgentConfigEditor(false);
             loadExperiment();
           }}
         />

@@ -51,6 +51,13 @@ class EvaluatorConfig(BaseModel):
     trajectory_description: dict[str, Any] | None = None
 
 
+class AgentConfig(BaseModel):
+    """Model for agent configuration."""
+
+    model_id: str | None = None
+    system_prompt: str | None = None
+
+
 class ExperimentCreate(BaseModel):
     """Model for creating a new experiment."""
 
@@ -58,6 +65,7 @@ class ExperimentCreate(BaseModel):
     description: str | None = None
     cases: list[CaseCreate] = Field(default_factory=list)
     evaluators: list[EvaluatorConfig] = Field(default_factory=list)
+    agent_config: AgentConfig | None = None
 
 
 class ExperimentUpdate(BaseModel):
@@ -65,6 +73,7 @@ class ExperimentUpdate(BaseModel):
 
     name: str | None = None
     description: str | None = None
+    agent_config: AgentConfig | None = None
 
 
 class ExperimentResponse(BaseModel):
@@ -75,6 +84,7 @@ class ExperimentResponse(BaseModel):
     description: str | None = None
     cases: list[CaseResponse] = Field(default_factory=list)
     evaluators: list[EvaluatorConfig] = Field(default_factory=list)
+    agent_config: AgentConfig | None = None
     created_at: str
     updated_at: str
 

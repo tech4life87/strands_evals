@@ -1,10 +1,14 @@
 """FastAPI application for Strands Evals Web UI."""
 
 import asyncio
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from strands import Agent
+from strands_evals import Case
 from strands_evals.types.evaluation_report import EvaluationReport
 from .models import (
     BulkCaseCreate,
@@ -63,12 +67,14 @@ async def create_experiment(experiment: ExperimentCreate):
     """Create a new experiment."""
     cases = [case.model_dump() for case in experiment.cases]
     evaluators = [eval_config.model_dump() for eval_config in experiment.evaluators]
+    agent_config = experiment.agent_config.model_dump() if experiment.agent_config else None
 
     result = storage.create_experiment(
         name=experiment.name,
         description=experiment.description,
         cases=cases,
         evaluators=evaluators,
+        agent_config=agent_config,
     )
     return result
 
@@ -85,10 +91,12 @@ async def get_experiment(experiment_id: str):
 @app.put("/api/experiments/{experiment_id}", response_model=ExperimentResponse)
 async def update_experiment(experiment_id: str, update: ExperimentUpdate):
     """Update an experiment."""
+    agent_config = update.agent_config.model_dump() if update.agent_config else None
     result = storage.update_experiment(
         experiment_id,
         name=update.name,
         description=update.description,
+        agent_config=agent_config,
     )
     if not result:
         raise HTTPException(status_code=404, detail="Experiment not found")
@@ -343,6 +351,26 @@ async def run_evaluation_async(experiment_id: str, request: RunEvaluationRequest
     return evaluation
 
 
+def _create_agent_task(agent_config: dict | None):
+    """Create a task function that uses the configured Agent."""
+    model_id = agent_config.get("model_id") if agent_config else None
+    system_prompt = agent_config.get("system_prompt") if agent_config else None
+
+    def task_fn(case: Case) -> str:
+        """Task function that uses the Agent to process a case."""
+        agent_kwargs = {"callback_handler": None}
+        if model_id:
+            agent_kwargs["model_id"] = model_id
+        if system_prompt:
+            agent_kwargs["system_prompt"] = system_prompt
+
+        agent = Agent(**agent_kwargs)
+        result = agent(case.input)
+        return str(result)
+
+    return task_fn
+
+
 async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request: RunEvaluationRequest | None):
     """Background task for async evaluation."""
     experiment = storage.get_experiment(experiment_id)
@@ -353,15 +381,27 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
 
     try:
         num_cases = len(experiment["cases"])
+        agent_config = experiment.get("agent_config")
 
-        for i in range(num_cases):
-            await asyncio.sleep(0.5)
+        if not agent_config:
+            raise ValueError(
+                "Agent configuration is required. Please configure the Agent "
+                "(model and system prompt) before running evaluations."
+            )
 
-            progress = ((i + 1) / num_cases) * 100
+        experiment_obj = storage.to_experiment_object(experiment_id)
+        if not experiment_obj:
+            raise ValueError("Failed to create Experiment object")
+
+        task_fn = _create_agent_task(agent_config)
+
+        async def send_progress(current: int, total: int):
+            """Send progress update via WebSocket."""
+            progress = (current / total) * 100
             storage.update_evaluation(
                 evaluation_id,
                 progress=progress,
-                current_case=i + 1,
+                current_case=current,
             )
 
             if evaluation_id in active_websockets:
@@ -370,38 +410,31 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
                         await ws.send_json({
                             "type": "progress",
                             "progress": progress,
-                            "current_case": i + 1,
-                            "total_cases": num_cases,
+                            "current_case": current,
+                            "total_cases": total,
                         })
                     except Exception:
                         pass
 
-        mock_reports = []
-        for _eval_config in experiment["evaluators"]:
-            mock_report = EvaluationReport(
-                overall_score=0.85,
-                scores=[0.8 + (i * 0.05) % 0.2 for i in range(num_cases)],
-                test_passes=[True if i % 3 != 0 else False for i in range(num_cases)],
-                cases=[
-                    {
-                        "name": case.get("name", f"Case {i+1}"),
-                        "input": case["input"],
-                        "expected_output": case.get("expected_output"),
-                        "actual_output": f"Mock output for case {i+1}",
-                    }
-                    for i, case in enumerate(experiment["cases"])
-                ],
-                reasons=[f"Mock evaluation reason for case {i+1}" for i in range(num_cases)],
-                detailed_results=[],
+        max_workers = request.max_workers if request else 10
+        loop = asyncio.get_event_loop()
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            reports = await loop.run_in_executor(
+                executor,
+                lambda: experiment_obj.run_evaluations(task_fn)
             )
-            mock_reports.append(mock_report)
+
+        for i in range(num_cases):
+            await send_progress(i + 1, num_cases)
+            await asyncio.sleep(0.1)
 
         storage.update_evaluation(
             evaluation_id,
             status="completed",
             progress=100.0,
             current_case=num_cases,
-            reports=mock_reports,
+            reports=reports,
         )
 
         if evaluation_id in active_websockets:
@@ -415,7 +448,8 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
                     pass
 
     except Exception as e:
-        storage.update_evaluation(evaluation_id, status="failed", error=str(e))
+        error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        storage.update_evaluation(evaluation_id, status="failed", error=error_msg)
 
         if evaluation_id in active_websockets:
             for ws in active_websockets[evaluation_id]:
