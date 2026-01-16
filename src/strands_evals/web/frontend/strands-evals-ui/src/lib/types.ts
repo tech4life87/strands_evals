@@ -71,11 +71,18 @@ export interface EvaluationStatus {
   error: string | null;
 }
 
+export interface CaseResult {
+  name?: string;
+  input: unknown;
+  expected_output?: unknown;
+  actual_output?: unknown;
+}
+
 export interface EvaluationReport {
   overall_score: number;
   scores: number[];
   test_passes: boolean[];
-  cases: Record<string, unknown>[];
+  cases: CaseResult[];
   reasons: string[];
   detailed_results: Record<string, unknown>[][];
 }

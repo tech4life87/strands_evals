@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
   Play,
@@ -35,13 +35,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { api, createWebSocket } from '@/lib/api';
 import type { Experiment, EvaluationStatus, EvaluationReport } from '@/lib/types';
-import { formatDate, formatScore, downloadJson } from '@/lib/utils';
+import { formatScore, downloadJson } from '@/lib/utils';
 import { CaseEditor } from './CaseEditor';
 import { EvaluatorEditor } from './EvaluatorEditor';
 
 export function ExperimentDetail() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const [experiment, setExperiment] = useState<Experiment | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -341,7 +340,7 @@ export function ExperimentDetail() {
                               : JSON.stringify(testCase.input, null, 2)}
                           </pre>
                         </div>
-                        {testCase.expected_output && (
+                        {testCase.expected_output !== null && testCase.expected_output !== undefined && (
                           <div>
                             <h4 className="text-sm font-medium mb-1">Expected Output</h4>
                             <pre className="bg-muted p-3 rounded-md text-sm overflow-auto max-h-40">
@@ -473,7 +472,7 @@ export function ExperimentDetail() {
                               <XCircle className="h-5 w-5 text-red-500" />
                             )}
                             <span className="font-medium">
-                              {(caseResult as Record<string, unknown>).name as string || `Case ${caseIndex + 1}`}
+                              {caseResult.name || `Case ${caseIndex + 1}`}
                             </span>
                           </div>
                           <div className="flex items-center gap-4">
@@ -489,18 +488,18 @@ export function ExperimentDetail() {
                           <div>
                             <h4 className="text-sm font-medium mb-1">Input</h4>
                             <pre className="bg-muted/50 p-2 rounded text-sm overflow-auto max-h-32">
-                              {typeof (caseResult as Record<string, unknown>).input === 'string'
-                                ? (caseResult as Record<string, unknown>).input as string
-                                : JSON.stringify((caseResult as Record<string, unknown>).input, null, 2)}
+                              {typeof caseResult.input === 'string'
+                                ? caseResult.input
+                                : JSON.stringify(caseResult.input, null, 2)}
                             </pre>
                           </div>
-                          {(caseResult as Record<string, unknown>).actual_output && (
+                          {caseResult.actual_output !== null && caseResult.actual_output !== undefined && (
                             <div>
                               <h4 className="text-sm font-medium mb-1">Actual Output</h4>
                               <pre className="bg-muted/50 p-2 rounded text-sm overflow-auto max-h-32">
-                                {typeof (caseResult as Record<string, unknown>).actual_output === 'string'
-                                  ? (caseResult as Record<string, unknown>).actual_output as string
-                                  : JSON.stringify((caseResult as Record<string, unknown>).actual_output, null, 2)}
+                                {typeof caseResult.actual_output === 'string'
+                                  ? caseResult.actual_output
+                                  : JSON.stringify(caseResult.actual_output, null, 2)}
                               </pre>
                             </div>
                           )}

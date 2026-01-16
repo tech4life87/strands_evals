@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { api } from '@/lib/api';
-import type { EvaluatorTypeInfo } from '@/lib/types';
+import type { EvaluatorTypeInfo, EvaluatorConfig } from '@/lib/types';
 
 interface EvaluatorEditorProps {
   experimentId: string;
@@ -73,7 +73,7 @@ export function EvaluatorEditor({ experimentId, onClose, onSave }: EvaluatorEdit
     setError(null);
 
     try {
-      const config: Record<string, unknown> = {
+      const config: EvaluatorConfig = {
         evaluator_type: selectedType,
       };
 
@@ -96,7 +96,7 @@ export function EvaluatorEditor({ experimentId, onClose, onSave }: EvaluatorEdit
         }
       }
 
-      await api.evaluators.add(experimentId, config as Parameters<typeof api.evaluators.add>[1]);
+      await api.evaluators.add(experimentId, config);
       onSave();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add evaluator');
