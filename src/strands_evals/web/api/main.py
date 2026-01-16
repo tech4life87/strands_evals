@@ -5,7 +5,7 @@ import asyncio
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from ...types.evaluation_report import EvaluationReport
+from strands_evals.types.evaluation_report import EvaluationReport
 from .models import (
     BulkCaseCreate,
     CaseCreate,

@@ -4,8 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ...case import Case
-from ...evaluators import (
+from strands_evals.case import Case
+from strands_evals.evaluators import (
     Evaluator,
     FaithfulnessEvaluator,
     GoalSuccessRateEvaluator,
@@ -17,8 +17,8 @@ from ...evaluators import (
     ToolSelectionAccuracyEvaluator,
     TrajectoryEvaluator,
 )
-from ...experiment import Experiment
-from ...types.evaluation_report import EvaluationReport
+from strands_evals.experiment import Experiment
+from strands_evals.types.evaluation_report import EvaluationReport
 
 
 class ExperimentStorage:
