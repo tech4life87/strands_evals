@@ -61,12 +61,20 @@ class ExperimentStorage:
                     }
                 )
 
+        # Process evaluators to ensure they have IDs
+        processed_evaluators = []
+        if evaluators:
+            for eval_config in evaluators:
+                if "id" not in eval_config:
+                    eval_config = {"id": str(uuid.uuid4()), **eval_config}
+                processed_evaluators.append(eval_config)
+
         experiment = {
             "id": experiment_id,
             "name": name,
             "description": description,
             "cases": processed_cases,
-            "evaluators": evaluators or [],
+            "evaluators": processed_evaluators,
             "agent_config": agent_config,
             "created_at": now,
             "updated_at": now,
