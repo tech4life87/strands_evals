@@ -351,6 +351,17 @@ async def run_evaluation_async(experiment_id: str, request: RunEvaluationRequest
     return evaluation
 
 
+def _create_passthrough_task():
+    """Create a task function that returns expected_output as actual_output (for testing evaluators)."""
+    def task_fn(case: Case) -> str:
+        """Passthrough task that returns expected_output as actual_output."""
+        if case.expected_output is not None:
+            return str(case.expected_output)
+        return str(case.input)
+
+    return task_fn
+
+
 def _create_agent_task(agent_config: dict | None):
     """Create a task function that uses the configured Agent."""
     model_id = agent_config.get("model_id") if agent_config else None
@@ -383,17 +394,17 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
         num_cases = len(experiment["cases"])
         agent_config = experiment.get("agent_config")
 
-        if not agent_config:
-            raise ValueError(
-                "Agent configuration is required. Please configure the Agent "
-                "(model and system prompt) before running evaluations."
-            )
-
         experiment_obj = storage.to_experiment_object(experiment_id)
         if not experiment_obj:
             raise ValueError("Failed to create Experiment object")
 
-        task_fn = _create_agent_task(agent_config)
+        # Use Agent if configured, otherwise use passthrough mode
+        if agent_config and (agent_config.get("model_id") or agent_config.get("system_prompt")):
+            task_fn = _create_agent_task(agent_config)
+        else:
+            # Passthrough mode: use expected_output as actual_output
+            # This allows testing evaluators without needing an Agent
+            task_fn = _create_passthrough_task()
 
         async def send_progress(current: int, total: int):
             """Send progress update via WebSocket."""

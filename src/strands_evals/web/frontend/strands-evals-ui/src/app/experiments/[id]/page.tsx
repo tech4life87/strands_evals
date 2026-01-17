@@ -211,7 +211,8 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
   }
 
   const hasAgentConfig = experiment.agent_config && (experiment.agent_config.model_id || experiment.agent_config.system_prompt);
-  const canRunEvaluation = experiment.cases.length > 0 && experiment.evaluators.length > 0 && hasAgentConfig;
+  // Agent is optional - if not configured, evaluation will use passthrough mode (expected_output as actual_output)
+  const canRunEvaluation = experiment.cases.length > 0 && experiment.evaluators.length > 0;
 
   return (
     <div className="container mx-auto py-8 px-4">
@@ -271,7 +272,7 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
         <TabsList>
           <TabsTrigger value="cases">Cases ({experiment.cases.length})</TabsTrigger>
           <TabsTrigger value="evaluators">Evaluators ({experiment.evaluators.length})</TabsTrigger>
-          <TabsTrigger value="agent">Agent {hasAgentConfig ? '' : '(Not configured)'}</TabsTrigger>
+          <TabsTrigger value="agent">Agent {hasAgentConfig ? '' : '(Optional)'}</TabsTrigger>
           <TabsTrigger value="results" disabled={reports.length === 0}>Results</TabsTrigger>
         </TabsList>
 
@@ -459,11 +460,12 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
             <Card className="text-center py-8">
               <CardContent>
                 <p className="text-muted-foreground mb-4">
-                  No agent configured. You need to configure an agent before running evaluations.
+                  No agent configured. Agent is optional - without an agent, evaluations will use
+                  expected_output as actual_output (passthrough mode for testing evaluators).
                 </p>
                 <Button onClick={() => setShowAgentConfigEditor(true)}>
                   <Plus className="mr-2 h-4 w-4" />
-                  Configure Agent
+                  Configure Agent (Optional)
                 </Button>
               </CardContent>
             </Card>
