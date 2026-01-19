@@ -268,6 +268,42 @@ export default function ExperimentDetail({ params }: { params: Promise<{ id: str
         </Card>
       )}
 
+      {error && (
+        <Card className="mb-6 border-destructive">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-3">
+              <XCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-medium text-destructive">Error</h3>
+                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">{error}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => setError(null)}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {evaluation?.status === 'failed' && evaluation.error && (
+        <Card className="mb-6 border-destructive">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-3">
+              <XCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-medium text-destructive">Evaluation Failed</h3>
+                <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap">{evaluation.error}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Tabs defaultValue="cases" className="space-y-4">
         <TabsList>
           <TabsTrigger value="cases">Cases ({experiment.cases.length})</TabsTrigger>

@@ -1,6 +1,7 @@
 """FastAPI application for Strands Evals Web UI."""
 
 import asyncio
+import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,6 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from strands import Agent
 from strands_evals import Case
 from strands_evals.types.evaluation_report import EvaluationReport
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger("strands_evals.web")
 from .models import (
     BulkCaseCreate,
     CaseCreate,
@@ -399,17 +407,23 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
     sending progress updates via WebSocket as each case completes. This provides
     real-time feedback to the UI instead of waiting for all cases to complete.
     """
+    logger.info(f"Starting async evaluation: evaluation_id={evaluation_id}, experiment_id={experiment_id}")
+    
     experiment = storage.get_experiment(experiment_id)
     if not experiment:
+        logger.error(f"Experiment not found: {experiment_id}")
         return
 
     storage.update_evaluation(evaluation_id, status="running")
+    logger.debug(f"Evaluation status set to 'running'")
 
     try:
         cases_data = experiment["cases"]
         evaluators_data = experiment["evaluators"]
         num_cases = len(cases_data)
         agent_config = experiment.get("agent_config")
+
+        logger.info(f"Evaluation config: {num_cases} cases, {len(evaluators_data)} evaluators, agent_config={bool(agent_config)}")
 
         if num_cases == 0:
             raise ValueError("No cases to evaluate")
@@ -440,10 +454,14 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
         if not evaluators:
             raise ValueError("Failed to create evaluators")
 
+        logger.debug(f"Created {len(evaluators)} evaluators: {[e.get_type_name() for e in evaluators]}")
+
         # Use Agent if configured, otherwise use passthrough mode
         if agent_config and (agent_config.get("model_id") or agent_config.get("system_prompt")):
+            logger.info(f"Using Agent task with model_id={agent_config.get('model_id')}")
             task_fn = _create_agent_task(agent_config)
         else:
+            logger.info("Using passthrough task (no Agent configured)")
             task_fn = _create_passthrough_task()
 
         # Initialize data structures for collecting results per evaluator
@@ -459,8 +477,10 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
         }
 
         # Process each case and send progress updates
+        logger.info(f"Starting to process {num_cases} cases")
         for case_idx, case in enumerate(cases):
             case_name = case.name or f"Case {case_idx + 1}"
+            logger.debug(f"Processing case {case_idx + 1}/{num_cases}: {case_name}")
             
             # Send progress update before processing
             progress = (case_idx / num_cases) * 100
@@ -502,6 +522,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
                 # Evaluate with each evaluator
                 for evaluator in evaluators:
                     eval_name = evaluator.get_type_name()
+                    logger.debug(f"Running evaluator: {eval_name}")
                     try:
                         # Create EvaluationData for the evaluator
                         from strands_evals.types.evaluation import EvaluationData
@@ -529,6 +550,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
                         evaluator_data[eval_name]["reasons"].append(aggregate_reason or "")
                         evaluator_data[eval_name]["detailed_results"].append(evaluation_outputs)
                     except Exception as eval_error:
+                        logger.error(f"Evaluator {eval_name} failed: {eval_error}")
                         evaluator_data[eval_name]["cases"].append(evaluation_context)
                         evaluator_data[eval_name]["scores"].append(0)
                         evaluator_data[eval_name]["test_passes"].append(False)
@@ -537,6 +559,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
 
             except Exception as task_error:
                 # Task execution failed - record failure for all evaluators
+                logger.error(f"Task execution failed for case {case_name}: {task_error}")
                 for evaluator in evaluators:
                     eval_name = evaluator.get_type_name()
                     evaluator_data[eval_name]["cases"].append({
@@ -554,6 +577,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
             await asyncio.sleep(0.05)
 
         # Build final reports
+        logger.info(f"All cases processed, building final reports")
         reports = []
         for evaluator in evaluators:
             eval_name = evaluator.get_type_name()
@@ -579,6 +603,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
         )
 
         # Send completion message
+        logger.info(f"Evaluation completed successfully: {evaluation_id}")
         await _send_ws_message(evaluation_id, {
             "type": "completed",
             "evaluation_id": evaluation_id,
@@ -586,6 +611,7 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
 
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
+        logger.error(f"Evaluation failed: {evaluation_id}\n{error_msg}")
         storage.update_evaluation(evaluation_id, status="failed", error=error_msg)
 
         await _send_ws_message(evaluation_id, {
