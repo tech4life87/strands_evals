@@ -120,8 +120,10 @@ export const api = {
     getStatus: (evaluationId: string) =>
       fetchApi<EvaluationStatus>(`/api/evaluations/${evaluationId}/status`),
     
-    getReport: (evaluationId: string) =>
-      fetchApi<EvaluationReport[]>(`/api/evaluations/${evaluationId}/report`),
+    getReport: async (evaluationId: string): Promise<EvaluationReport[]> => {
+      const response = await fetchApi<{ id: string; experiment_id: string; reports: EvaluationReport[]; created_at: string }>(`/api/evaluations/${evaluationId}/report`);
+      return response.reports;
+    },
   },
 };
 

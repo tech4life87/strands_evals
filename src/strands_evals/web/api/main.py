@@ -382,8 +382,23 @@ def _create_agent_task(agent_config: dict | None):
     return task_fn
 
 
+async def _send_ws_message(evaluation_id: str, message: dict):
+    """Send a message to all WebSocket clients for an evaluation."""
+    if evaluation_id in active_websockets:
+        for ws in active_websockets[evaluation_id]:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass
+
+
 async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request: RunEvaluationRequest | None):
-    """Background task for async evaluation."""
+    """Background task for async evaluation.
+    
+    This implements a custom evaluation loop that processes cases one by one,
+    sending progress updates via WebSocket as each case completes. This provides
+    real-time feedback to the UI instead of waiting for all cases to complete.
+    """
     experiment = storage.get_experiment(experiment_id)
     if not experiment:
         return
@@ -391,55 +406,170 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
     storage.update_evaluation(evaluation_id, status="running")
 
     try:
-        num_cases = len(experiment["cases"])
+        cases_data = experiment["cases"]
+        evaluators_data = experiment["evaluators"]
+        num_cases = len(cases_data)
         agent_config = experiment.get("agent_config")
 
-        experiment_obj = storage.to_experiment_object(experiment_id)
-        if not experiment_obj:
-            raise ValueError("Failed to create Experiment object")
+        if num_cases == 0:
+            raise ValueError("No cases to evaluate")
+
+        if not evaluators_data:
+            raise ValueError("No evaluators configured")
+
+        # Create Case objects
+        cases = [
+            Case(
+                name=case.get("name"),
+                input=case["input"],
+                expected_output=case.get("expected_output"),
+                expected_trajectory=case.get("expected_trajectory"),
+                expected_interactions=case.get("expected_interactions"),
+                metadata=case.get("metadata"),
+            )
+            for case in cases_data
+        ]
+
+        # Create Evaluator objects
+        evaluators = []
+        for eval_config in evaluators_data:
+            evaluator = storage._create_evaluator(eval_config)
+            if evaluator:
+                evaluators.append(evaluator)
+
+        if not evaluators:
+            raise ValueError("Failed to create evaluators")
 
         # Use Agent if configured, otherwise use passthrough mode
         if agent_config and (agent_config.get("model_id") or agent_config.get("system_prompt")):
             task_fn = _create_agent_task(agent_config)
         else:
-            # Passthrough mode: use expected_output as actual_output
-            # This allows testing evaluators without needing an Agent
             task_fn = _create_passthrough_task()
 
-        async def send_progress(current: int, total: int):
-            """Send progress update via WebSocket."""
-            progress = (current / total) * 100
-            storage.update_evaluation(
-                evaluation_id,
-                progress=progress,
-                current_case=current,
-            )
+        # Initialize data structures for collecting results per evaluator
+        evaluator_data: dict[str, dict[str, list]] = {
+            evaluator.get_type_name(): {
+                "scores": [],
+                "test_passes": [],
+                "cases": [],
+                "reasons": [],
+                "detailed_results": [],
+            }
+            for evaluator in evaluators
+        }
 
-            if evaluation_id in active_websockets:
-                for ws in active_websockets[evaluation_id]:
+        # Process each case and send progress updates
+        for case_idx, case in enumerate(cases):
+            case_name = case.name or f"Case {case_idx + 1}"
+            
+            # Send progress update before processing
+            progress = (case_idx / num_cases) * 100
+            storage.update_evaluation(evaluation_id, progress=progress, current_case=case_idx)
+            await _send_ws_message(evaluation_id, {
+                "type": "progress",
+                "progress": progress,
+                "current_case": case_idx,
+                "total_cases": num_cases,
+                "case_name": case_name,
+                "message": f"Processing case: {case_name}",
+            })
+
+            # Run the task function to get actual output
+            try:
+                loop = asyncio.get_event_loop()
+                task_output = await loop.run_in_executor(None, task_fn, case)
+                
+                # Build evaluation context
+                evaluation_context = {
+                    "name": case.name,
+                    "input": case.input,
+                    "expected_output": case.expected_output,
+                    "expected_trajectory": case.expected_trajectory,
+                    "expected_interactions": case.expected_interactions,
+                    "metadata": case.metadata,
+                    "actual_output": None,
+                    "actual_trajectory": None,
+                    "actual_interactions": None,
+                }
+                
+                if isinstance(task_output, dict):
+                    evaluation_context["actual_output"] = task_output.get("output")
+                    evaluation_context["actual_trajectory"] = task_output.get("trajectory")
+                    evaluation_context["actual_interactions"] = task_output.get("interactions")
+                else:
+                    evaluation_context["actual_output"] = task_output
+
+                # Evaluate with each evaluator
+                for evaluator in evaluators:
+                    eval_name = evaluator.get_type_name()
                     try:
-                        await ws.send_json({
-                            "type": "progress",
-                            "progress": progress,
-                            "current_case": current,
-                            "total_cases": total,
-                        })
-                    except Exception:
-                        pass
+                        # Create EvaluationData for the evaluator
+                        from strands_evals.types.evaluation import EvaluationData
+                        eval_data = EvaluationData(
+                            name=case.name,
+                            input=case.input,
+                            expected_output=case.expected_output,
+                            expected_trajectory=case.expected_trajectory,
+                            expected_interactions=case.expected_interactions,
+                            metadata=case.metadata,
+                            actual_output=evaluation_context["actual_output"],
+                            actual_trajectory=evaluation_context["actual_trajectory"],
+                            actual_interactions=evaluation_context["actual_interactions"],
+                        )
+                        
+                        # Run evaluation
+                        evaluation_outputs = await loop.run_in_executor(
+                            None, evaluator.evaluate, eval_data
+                        )
+                        (aggregate_score, aggregate_pass, aggregate_reason) = evaluator.aggregator(evaluation_outputs)
 
-        max_workers = request.max_workers if request else 10
-        loop = asyncio.get_event_loop()
+                        evaluator_data[eval_name]["cases"].append(evaluation_context)
+                        evaluator_data[eval_name]["scores"].append(aggregate_score)
+                        evaluator_data[eval_name]["test_passes"].append(aggregate_pass)
+                        evaluator_data[eval_name]["reasons"].append(aggregate_reason or "")
+                        evaluator_data[eval_name]["detailed_results"].append(evaluation_outputs)
+                    except Exception as eval_error:
+                        evaluator_data[eval_name]["cases"].append(evaluation_context)
+                        evaluator_data[eval_name]["scores"].append(0)
+                        evaluator_data[eval_name]["test_passes"].append(False)
+                        evaluator_data[eval_name]["reasons"].append(f"Evaluator error: {str(eval_error)}")
+                        evaluator_data[eval_name]["detailed_results"].append([])
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            reports = await loop.run_in_executor(
-                executor,
-                lambda: experiment_obj.run_evaluations(task_fn)
+            except Exception as task_error:
+                # Task execution failed - record failure for all evaluators
+                for evaluator in evaluators:
+                    eval_name = evaluator.get_type_name()
+                    evaluator_data[eval_name]["cases"].append({
+                        "name": case.name,
+                        "input": case.input,
+                        "expected_output": case.expected_output,
+                        "actual_output": None,
+                    })
+                    evaluator_data[eval_name]["scores"].append(0)
+                    evaluator_data[eval_name]["test_passes"].append(False)
+                    evaluator_data[eval_name]["reasons"].append(f"Task error: {str(task_error)}")
+                    evaluator_data[eval_name]["detailed_results"].append([])
+
+            # Small delay to allow WebSocket messages to be sent
+            await asyncio.sleep(0.05)
+
+        # Build final reports
+        reports = []
+        for evaluator in evaluators:
+            eval_name = evaluator.get_type_name()
+            data = evaluator_data[eval_name]
+            scores = data["scores"]
+            report = EvaluationReport(
+                overall_score=sum(scores) / len(scores) if scores else 0,
+                scores=scores,
+                test_passes=data["test_passes"],
+                cases=data["cases"],
+                reasons=data["reasons"],
+                detailed_results=data["detailed_results"],
             )
+            reports.append(report)
 
-        for i in range(num_cases):
-            await send_progress(i + 1, num_cases)
-            await asyncio.sleep(0.1)
-
+        # Update storage with completed status and reports
         storage.update_evaluation(
             evaluation_id,
             status="completed",
@@ -448,29 +578,20 @@ async def _run_async_evaluation(evaluation_id: str, experiment_id: str, request:
             reports=reports,
         )
 
-        if evaluation_id in active_websockets:
-            for ws in active_websockets[evaluation_id]:
-                try:
-                    await ws.send_json({
-                        "type": "completed",
-                        "evaluation_id": evaluation_id,
-                    })
-                except Exception:
-                    pass
+        # Send completion message
+        await _send_ws_message(evaluation_id, {
+            "type": "completed",
+            "evaluation_id": evaluation_id,
+        })
 
     except Exception as e:
         error_msg = f"{str(e)}\n{traceback.format_exc()}"
         storage.update_evaluation(evaluation_id, status="failed", error=error_msg)
 
-        if evaluation_id in active_websockets:
-            for ws in active_websockets[evaluation_id]:
-                try:
-                    await ws.send_json({
-                        "type": "error",
-                        "error": str(e),
-                    })
-                except Exception:
-                    pass
+        await _send_ws_message(evaluation_id, {
+            "type": "error",
+            "error": str(e),
+        })
 
 
 @app.get("/api/evaluations/{evaluation_id}/status", response_model=EvaluationStatus)
