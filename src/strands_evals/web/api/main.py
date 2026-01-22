@@ -379,7 +379,8 @@ def _create_agent_task(agent_config: dict | None):
         """Task function that uses the Agent to process a case."""
         agent_kwargs = {"callback_handler": None}
         if model_id:
-            agent_kwargs["model_id"] = model_id
+            # Agent constructor uses 'model' parameter, not 'model_id'
+            agent_kwargs["model"] = model_id
         if system_prompt:
             agent_kwargs["system_prompt"] = system_prompt
 
