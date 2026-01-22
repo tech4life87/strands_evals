@@ -28,6 +28,9 @@ dependencies = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/strands_evals"]
 
+[project.scripts]
+strands-web = "strands_evals.web.cli:main"
+
 [project.optional-dependencies]
 test = [
     "pytest>=8.0.0,<10.0.0",
@@ -45,9 +48,16 @@ dev = [
 
 otel = ["opentelemetry-exporter-otlp-proto-http>=1.30.0,<2.0.0"]
 
+web = [
+    "fastapi>=0.115.0,<1.0.0",
+    "uvicorn>=0.34.0,<1.0.0",
+    "websockets>=14.0,<15.0",
+]
+
 [tool.ruff]
 line-length = 120
 include = ["src/**/*.py", "tests/**/*.py", "tests_integ/**/*.py"]
+exclude = ["src/strands_evals/web/frontend/**"]
 
 [tool.hatch.envs.hatch-test]
 installer = "uv"
@@ -126,6 +136,7 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "src/strands_evals/evaluators/prompt_templates/*" = ["E501"] # line-length
 "src/strands_evals/generators/prompt_template/*" = ["E501"] # line-length
+"src/strands_evals/web/cli.py" = ["T201"] # allow print statements in CLI
 
 [tool.mypy]
 # Disable strict checks that cause false positives with Generic classes
